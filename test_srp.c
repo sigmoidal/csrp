@@ -1,177 +1,99 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
-#include <winsock2.h>
-#include <time.h>
-#include <stdbool.h>
 
 #include "srp.h"
 
-const __int64 DELTA_EPOCH_IN_MICROSECS = 11644473600000000;
-struct timeval2 {
-	__int32 tv_sec;
-	__int32 tv_usec;
-};
-struct timezone2
+
+int main(int argc, char * argv[])
 {
-	__int32  tz_minuteswest; /* minutes W of Greenwich */
-	bool  tz_dsttime;     /* type of dst correction */
-};
-int gettimeofday(struct timeval2 *tv/*in*/, struct timezone2 *tz/*in*/)
-{
-	FILETIME ft;
-	__int64 tmpres = 0;
-	TIME_ZONE_INFORMATION tz_winapi;
-	int rez = 0;
+	int auth_failed = 1;
 
-	ZeroMemory(&ft, sizeof(ft));
-	ZeroMemory(&tz_winapi, sizeof(tz_winapi));
+	struct SRPVerifier * ver;
+	struct SRPUser     * usr;
 
-	GetSystemTimeAsFileTime(&ft);
+	const unsigned char * bytes_s = 0;
+	const unsigned char * bytes_v = 0;
+	const unsigned char * bytes_A = 0;
+	const unsigned char * bytes_B = 0;
 
-	tmpres = ft.dwHighDateTime;
-	tmpres <<= 32;
-	tmpres |= ft.dwLowDateTime;
+	const unsigned char * bytes_M = 0;
+	const unsigned char * bytes_HAMK = 0;
 
-	/*converting file time to unix epoch*/
-	tmpres /= 10;  /*convert into microseconds*/
-	tmpres -= DELTA_EPOCH_IN_MICROSECS;
-	tv->tv_sec = (__int32)(tmpres*0.000001);
-	tv->tv_usec = (tmpres % 1000000);
+	int len_s = 0;
+	int len_v = 0;
+	int len_A = 0;
+	int len_B = 0;
+	int len_M = 0;
 
+	const char * username = "testuser";
+	const char * password = "password";
 
-	//_tzset(),don't work properly, so we use GetTimeZoneInformation
-	rez = GetTimeZoneInformation(&tz_winapi);
-	tz->tz_dsttime = (rez == 2) ? true : false;
-	tz->tz_minuteswest = tz_winapi.Bias + ((rez == 2) ? tz_winapi.DaylightBias : 0);
+	const char * auth_username = 0;
 
-	return 0;
-}
+	SRP_HashAlgorithm alg = SRP_SHA1;
+	SRP_NGType        ng_type = SRP_NG_2048;
 
+	/* Create a salt+verification key for the user's password. The salt and
+	* key need to be computed at the time the user's password is set and
+	* must be stored by the server-side application for use during the
+	* authentication process.
+	*/
+	srp_create_salted_verification_key(alg, ng_type, username,
+		(const unsigned char *)password,
+		strlen(password),
+		&bytes_s, &len_s,
+		&bytes_v, &len_v,
+		NULL, NULL);
 
-#define NITER          100
-#define TEST_HASH      SRP_SHA1
-#define TEST_NG        SRP_NG_1024
+	/* Begin authentication process */
+	usr = srp_user_new(alg, ng_type, username,
+		(const unsigned char *)password,
+		strlen(password), NULL, NULL);
 
-unsigned long long get_usec()
-{
-    struct timeval t;
-    gettimeofday(&t, NULL);
-    return (((unsigned long long)t.tv_sec) * 1000000) + t.tv_usec;
-}
+	srp_user_start_authentication(usr, &auth_username, &bytes_A, &len_A);
 
-const char * test_n_hex = "EEAF0AB9ADB38DD69C33F80AFA8FC5E86072618775FF3C0B9EA2314C9C256576D674DF7496"
-   "EA81D3383B4813D692C6E0E0D5D8E250B98BE48E495C1D6089DAD15DC7D7B46154D6B6CE8E"
-   "F4AD69B15D4982559B297BCF1885C529F566660E57EC68EDBC3C05726CC02FD4CBF4976EAA"
-   "9AFD5138FE8376435B9FC61D2FC0EB06E3";
-const char * test_g_hex = "2";
+	/* User -> Host: (username, bytes_A) */
+	ver = srp_verifier_new(alg, ng_type, username, bytes_s, len_s, bytes_v, len_v,
+		bytes_A, len_A, &bytes_B, &len_B, NULL, NULL);
 
+	if (!bytes_B) {
+		printf("Verifier SRP-6a safety check violated!\n");
+		goto auth_failed;
+	}
 
-int main( int argc, char * argv[] )
-{
-    struct SRPVerifier * ver;
-    struct SRPUser     * usr;
-    
-    const unsigned char * bytes_s = 0;
-    const unsigned char * bytes_v = 0;
-    const unsigned char * bytes_A = 0;
-    const unsigned char * bytes_B = 0;
-    
-    const unsigned char * bytes_M    = 0;
-    const unsigned char * bytes_HAMK = 0;
-    
-    int len_s   = 0;
-    int len_v   = 0;
-    int len_A   = 0;
-    int len_B   = 0;
-    int len_M   = 0;
-    int i;
-    
-    unsigned long long start;
-    unsigned long long duration;
-    
-    const char * username = "testuser";
-    const char * password = "password";
-    
-    const char * auth_username = 0;
-    const char * n_hex         = 0;
-    const char * g_hex         = 0;
-    
-    SRP_HashAlgorithm alg     = TEST_HASH;
-    SRP_NGType        ng_type = SRP_NG_8192; //TEST_NG;
-    
-    if (ng_type == SRP_NG_CUSTOM)
-    {
-        n_hex = test_n_hex;
-        g_hex = test_g_hex;
-    }
+	/* Host -> User: (bytes_s, bytes_B) */
+	srp_user_process_challenge(usr, bytes_s, len_s, bytes_B, len_B, &bytes_M, &len_M);
 
-    
-    srp_create_salted_verification_key( alg, ng_type, username, 
-                (const unsigned char *)password, 
-                strlen(password), 
-                &bytes_s, &len_s, &bytes_v, &len_v, n_hex, g_hex );
-    
+	if (!bytes_M) {
+		printf("User SRP-6a safety check violation!\n");
+		goto auth_failed;
+	}
 
-    
-    start = get_usec();
-    
-    for( i = 0; i < NITER; i++ )
-    {
-        usr =  srp_user_new( alg, ng_type, username, 
-                             (const unsigned char *)password, 
-                             strlen(password), n_hex, g_hex );
+	/* User -> Host: (bytes_M) */
+	srp_verifier_verify_session(ver, bytes_M, &bytes_HAMK);
 
-        srp_user_start_authentication( usr, &auth_username, &bytes_A, &len_A );
+	if (!bytes_HAMK) {
+		printf("User authentication failed!\n");
+		goto auth_failed;
+	}
 
-        /* User -> Host: (username, bytes_A) */
-        ver =  srp_verifier_new( alg, ng_type, username, bytes_s, len_s, bytes_v, len_v, 
-                                 bytes_A, len_A, & bytes_B, &len_B, n_hex, g_hex );
-        
-        if ( !bytes_B )
-        {
-            printf("Verifier SRP-6a safety check violated!\n");
-            goto cleanup;
-        }
-        
-        /* Host -> User: (bytes_s, bytes_B) */
-        srp_user_process_challenge( usr, bytes_s, len_s, bytes_B, len_B, &bytes_M, &len_M );
-        
-        if ( !bytes_M )
-        {
-            printf("User SRP-6a safety check violation!\n");
-            goto cleanup;
-        }
-        
-        /* User -> Host: (bytes_M) */
-        srp_verifier_verify_session( ver, bytes_M, &bytes_HAMK );
-        
-        if ( !bytes_HAMK )
-        {
-            printf("User authentication failed!\n");
-            goto cleanup;
-        }
-        
-        /* Host -> User: (HAMK) */
-        srp_user_verify_session( usr, bytes_HAMK );
-        
-        if ( !srp_user_is_authenticated(usr) )
-        {
-            printf("Server authentication failed!\n");
-        }
-        
-cleanup:
-        srp_verifier_delete( ver );
-        srp_user_delete( usr );
-    }
-    
-    duration = get_usec() - start;
-    
-    printf("Usec per call: %d\n", (int)(duration / NITER));
-    
-    
-    free( (char *)bytes_s );
-    free( (char *)bytes_v );
-        
-    return 0;
+	/* Host -> User: (HAMK) */
+	srp_user_verify_session(usr, bytes_HAMK);
+
+	if (!srp_user_is_authenticated(usr)) {
+		printf("Server authentication failed!\n");
+		goto auth_failed;
+	}
+
+	auth_failed = 0; /* auth success! */
+
+auth_failed:
+	srp_verifier_delete(ver);
+	srp_user_delete(usr);
+
+	free((char *)bytes_s);
+	free((char *)bytes_v);
+
+	return auth_failed;
 }
