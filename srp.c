@@ -28,6 +28,7 @@
  */
 
 #ifdef WIN32
+	#include <windows.h>
     #include <Wincrypt.h>
 #else
     #include <sys/time.h>

@@ -57,7 +57,6 @@
 #ifndef SRP_H
 #define SRP_H
 
-
 struct SRPVerifier;
 struct SRPUser;
 
